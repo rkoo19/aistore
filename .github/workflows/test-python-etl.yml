@@ -39,7 +39,7 @@ jobs:
         if: github.event_name == 'pull_request'
         run: |
           cd $GITHUB_WORKSPACE/deploy/dev/k8s
-          IMAGE_TAG=github-ci CLUSTER_TYPE=kind CLUSTER_NAME=ais-ci ./utils/local-development/build_and_load.sh
+          IMAGE_TAG=github-ci CLUSTER_TYPE=kind CLUSTER_NAME=ais-ci ./utils/build_and_load.sh
 
       - name: Run AIStore in KinD
         run: |

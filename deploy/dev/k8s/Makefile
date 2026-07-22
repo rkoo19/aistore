@@ -23,7 +23,7 @@ multi-node:
 	./utils/deploy.sh overlays/samples/multi-node
 
 local-dev:
-	./utils/local-development/build_and_load.sh
+	IMAGE_TAG=local-development ./utils/build_and_load.sh
 	./utils/deploy.sh overlays/samples/local-dev
 
 external-access:

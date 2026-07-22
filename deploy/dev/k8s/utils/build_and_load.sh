@@ -4,7 +4,10 @@
 
 set -e
 
-IMAGE_TAG="${IMAGE_TAG:-local-development}"
+if [ -z "$IMAGE_TAG" ]; then
+  echo "Error: IMAGE_TAG must be set" >&2
+  exit 1
+fi
 
 echo "Building AIStore images with tag '$IMAGE_TAG'..."
 
