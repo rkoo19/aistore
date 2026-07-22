@@ -32,8 +32,6 @@ import (
 // v5.1 will enable this implementation.
 //
 // TODO:
-// - keep local (public, private) keypairs in memory-only: regen on restart and advertise via joinCluster
-// - secure target redirected-datapath: redirect-marked (pid+ptime) is not good enough
 // - sign s3Redirect (see comment in ais/prxs3.go)
 // - add canonical query/body coverage
 // -------
@@ -81,9 +79,10 @@ func (h *htrun) toggleSignVerify(enabled bool) {
 
 func (svs *svState) init() {
 	svs.nonce.Store(uint64(cos.CryptoRandI()))
+	now := mono.NanoTime()
 	svs.cur.Store(&_sv{
-		on:   false,                              // off until cluster-started (at least until)
-		last: mono.NanoTime() - int64(time.Hour), // expired at init time
+		on:   false,                  // off until cluster-started (at least until)
+		last: now - int64(time.Hour), // expired at init time
 	})
 }
 
@@ -99,18 +98,17 @@ func (svs *svState) set(on bool) {
 	svs.cur.Store(upd)
 }
 
-func (svs *svState) signTo(si *meta.Snode) bool {
+func (svs *svState) sign() bool {
 	if cmn.IsV50Bridge() {
 		return false
 	}
-	l := len(si.VerifyingKey)
-	if l == 0 {
-		return false
-	}
-	debug.Assert(l == cos.NodeSigningPublicKeySize) // Ed25519
 
 	on := cmn.Rom.SignVerifyEnabled()
 	cur := svs.cur.Load()
+
+	// A note on stateful (config <=> htrun.svs) redundancy:
+	// - the config.Auth.IntraCluster.Enabled expresses desired policy
+	// - htrun.svs.cur.on expresses whether and when that policy has been enacted locally
 
 	return (on && cur.on == on) || !svs.graceExpired(cur.last)
 }
@@ -162,12 +160,12 @@ func newSigner(r *http.Request, h *htrun, sb *cos.SB, svs *svState, smapVer int6
 
 // sv.sig ends up pointing into sb (buildURL/qencode clone it), same as compute().
 func (sv *svReq) sign(pid string) {
-	debug.Assert(sv.h.nodeSigningKey != nil)
+	debug.Assert(sv.h.nodeKeyPair != nil)
 
 	sv.sb.Reset(sv.bufsizeSV(pid), false /*allow shrink*/) // borrow redurl's sb
 
 	msg := sv.payload(pid)
-	raw, err := cos.SignNodeMessage(sv.h.nodeSigningKey.SigningKey, msg)
+	raw, err := cos.SignNodeMessage(sv.h.nodeKeyPair.SigningKey, msg)
 	debug.AssertNoErr(err)
 
 	// sv.sig points into redurl's sb, same as compute()

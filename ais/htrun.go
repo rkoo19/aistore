@@ -87,8 +87,8 @@ type htrun struct {
 	}
 
 	// sign/verify
-	nodeSigningKey *cos.NodeSigningKey
-	svs            svState
+	nodeKeyPair *cos.NodeKeyPair
+	svs         svState
 
 	keepalive keepaliver
 	statsT    stats.Tracker
@@ -511,6 +511,23 @@ func (h *htrun) initPhase2(config *cmn.Config) {
 	hk.Reg("rate-limit"+hk.NameSuffix, h.ratelim.housekeep, hk.PruneRateLimiters)
 }
 
+// always generate upon restart and keep in memory only
+func (h *htrun) newKeyPair(sid, daeType string) *cos.NodeKeyPair {
+	err := cos.ValidateDaemonID(sid)
+	cos.AssertNoErr(err) // FATAL
+
+	pub, priv, err := cos.GenerateNodeKeyPair()
+	if err != nil {
+		sname := meta.Tname(sid)
+		if daeType == apc.Proxy {
+			sname = meta.Pname(sid)
+		}
+		cos.ExitLogf("failed to generate node key pair for %s: %v", sname, err)
+	}
+	h.nodeKeyPair = cos.NewNodeKeyPair(priv, pub)
+	return h.nodeKeyPair
+}
+
 // at startup, check this Snode vs locally stored Smap replica (NOTE: some errors are FATAL)
 func (h *htrun) loadSmap() (smap *smapX, reliable bool) {
 	smap = newSmap()
@@ -835,7 +852,7 @@ func (h *htrun) setIntraHdrs(dst *meta.Snode, req *http.Request, smap *smapX) {
 	req.Header.Set(apc.HdrSenderID, h.SID())
 	req.Header.Set(apc.HdrSenderName, h.si.Name())
 
-	if dst != nil && smap.vstr != "" && h.svs.signTo(dst) {
+	if dst != nil && h.svs.sign() {
 		h.signIntra(req, smap)
 	}
 }
@@ -864,13 +881,25 @@ func (h *htrun) verifyIntra(r *http.Request, snode *meta.Snode, sid, sname strin
 	debug.Assert(len(h.si.VerifyingKey) == cos.NodeSigningPublicKeySize)
 
 	// - a present signature is always verified
-	// - a missing one is rejected only once strict (grace elapsed)
+	// - a missing one is rejected only when _strict_ (ie., out of grace window)
 	svgrp, err := svgrpFromHdr(r.Header)
 	if err != nil {
 		return 0, err
 	}
-	if svgrp == nil && (!h.svs.strict() || _isPlainHealth(r)) {
-		return 0, nil
+	if svgrp == nil {
+		// with two specific exceptions for 'not-signed'
+		if _isPlainHealth(r) || !h.svs.strict() {
+			return 0, nil
+		}
+		var (
+			now    = mono.NanoTime()
+			config = cmn.GCO.Get()
+		)
+		if h.cluUptime(now) < config.Timeout.Startup.D() {
+			return 0, nil
+		}
+		return http.StatusUnauthorized,
+			fmt.Errorf("%s: unsigned intra-cluster request from %s", h, sname)
 	}
 	sv := newVerifier(r, h, svgrp)
 	if ecode, err := sv.verify(sid, snode, smap); err != nil {
@@ -2731,6 +2760,13 @@ func (h *htrun) uptime2hdr(hdr http.Header) {
 	now := mono.NanoTime()
 	hdr.Set(apc.HdrNodeUptime, strconv.FormatInt(now-h.startup.node.Load(), 10))
 	hdr.Set(apc.HdrClusterUptime, strconv.FormatInt(now-h.startup.cluster.Load(), 10))
+}
+
+func (h *htrun) cluUptime(now int64) (elapsed time.Duration) {
+	if at := h.startup.cluster.Load(); at > 0 {
+		elapsed = time.Duration(now - at)
+	}
+	return
 }
 
 // Tx:
