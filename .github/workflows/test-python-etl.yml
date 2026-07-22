@@ -38,10 +38,8 @@ jobs:
       - name: Build and load images into KinD
         if: github.event_name == 'pull_request'
         run: |
-          make -C $GITHUB_WORKSPACE/deploy/prod/k8s/aisnode_container IMAGE_TAG=github-ci build
-          make -C $GITHUB_WORKSPACE/deploy/prod/k8s/aisinit_container IMAGE_TAG=github-ci build
-          kind load docker-image aistorage/aisnode:github-ci --name ais-ci
-          kind load docker-image aistorage/ais-init:github-ci --name ais-ci
+          cd $GITHUB_WORKSPACE/deploy/dev/k8s
+          IMAGE_TAG=github-ci CLUSTER_TYPE=kind CLUSTER_NAME=ais-ci ./utils/local-development/build_and_load.sh
 
       - name: Run AIStore in KinD
         run: |
